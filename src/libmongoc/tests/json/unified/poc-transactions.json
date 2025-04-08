@@ -145,7 +145,10 @@
             {
               "commandStartedEvent": {
                 "command": {
-                  "drop": "test"
+                  "drop": "test",
+                  "writeConcern": {
+                    "$$exists": false
+                  }
                 },
                 "commandName": "drop",
                 "databaseName": "transaction-tests"
@@ -257,7 +260,10 @@
             {
               "commandStartedEvent": {
                 "command": {
-                  "drop": "test"
+                  "drop": "test",
+                  "writeConcern": {
+                    "$$exists": false
+                  }
                 },
                 "commandName": "drop",
                 "databaseName": "transaction-tests"
