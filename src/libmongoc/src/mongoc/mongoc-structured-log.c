@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <mlib/intencode.h>
 #include <common-atomic-private.h>
 #include <common-oid-private.h>
 #include <common-string-private.h>
@@ -25,6 +26,7 @@
 #include <mongoc/mongoc-topology-private.h>
 #include <mongoc/mongoc-structured-log.h>
 #include <mongoc/mongoc-util-private.h>
+#include <mlib/loop.h>
 
 #define STRUCTURED_LOG_COMPONENT_TABLE_SIZE (1 + (size_t) MONGOC_STRUCTURED_LOG_COMPONENT_CONNECTION)
 
@@ -159,7 +161,7 @@ mongoc_structured_log_opts_set_max_level_for_all_components (mongoc_structured_l
                                                              mongoc_structured_log_level_t level)
 {
    BSON_ASSERT_PARAM (opts);
-   for (int component = 0; component < STRUCTURED_LOG_COMPONENT_TABLE_SIZE; component++) {
+   mlib_foreach_urange (component, STRUCTURED_LOG_COMPONENT_TABLE_SIZE) {
       if (!mongoc_structured_log_opts_set_max_level_for_component (
              opts, (mongoc_structured_log_component_t) component, level)) {
          // Fine to stop on the first error, always means 'level' is wrong and none of these will succeed.
@@ -310,8 +312,7 @@ mongoc_structured_log_opts_set_max_document_length_from_env (mongoc_structured_l
    } else {
       char *endptr;
       long int_value = strtol (max_length_str, &endptr, 10);
-      if (int_value >= 0 && endptr != max_length_str && *endptr == '\0' &&
-          mcommon_in_range_signed (size_t, int_value) &&
+      if (int_value >= 0 && endptr != max_length_str && *endptr == '\0' && mlib_in_range (size_t, int_value) &&
           mongoc_structured_log_opts_set_max_document_length (opts, (size_t) int_value)) {
          result = true;
       }
@@ -349,7 +350,7 @@ mongoc_structured_log_opts_set_max_levels_from_env (mongoc_structured_log_opts_t
       all_ok = false;
    }
 
-   for (int component = 0; component < STRUCTURED_LOG_COMPONENT_TABLE_SIZE; component++) {
+   mlib_foreach_urange (component, STRUCTURED_LOG_COMPONENT_TABLE_SIZE) {
       if (_mongoc_structured_log_get_log_level_from_env (
              gStructuredLogComponentEnvVars[component], &level, &err_flag_per_component_atomic[component])) {
          BSON_ASSERT (mongoc_structured_log_opts_set_max_level_for_component (
@@ -604,11 +605,9 @@ _mongoc_structured_log_command_with_payloads_as_truncated_json (const mongoc_cmd
       BSON_ASSERT (doc_begin != doc_end);
 
       const uint8_t *doc_ptr = doc_begin;
-      int32_t doc_len;
 
-      while (doc_ptr + sizeof doc_len <= doc_end) {
-         memcpy (&doc_len, doc_ptr, sizeof doc_len);
-         doc_len = BSON_UINT32_FROM_LE (doc_len);
+      while (doc_ptr + sizeof (int32_t) <= doc_end) {
+         const int32_t doc_len = mlib_read_i32le (doc_ptr);
 
          bson_t doc;
          if (doc_len < 5 || (size_t) doc_len > (size_t) (doc_end - doc_ptr) ||
@@ -738,6 +737,24 @@ _mongoc_structured_log_append_boolean (bson_t *bson,
    const char *key_or_null = stage->arg1.utf8;
    if (key_or_null) {
       bson_append_bool (bson, key_or_null, -1, stage->arg2.boolean);
+   }
+   return stage + 1;
+}
+
+const mongoc_structured_log_builder_stage_t *
+_mongoc_structured_log_append_oid (bson_t *bson,
+                                   const mongoc_structured_log_builder_stage_t *stage,
+                                   const mongoc_structured_log_opts_t *opts)
+{
+   BSON_UNUSED (opts);
+   const char *key_or_null = stage->arg1.utf8;
+   const bson_oid_t *oid_or_null = stage->arg2.oid;
+   if (key_or_null) {
+      if (oid_or_null) {
+         bson_append_oid (bson, key_or_null, -1, oid_or_null);
+      } else {
+         bson_append_null (bson, key_or_null, -1);
+      }
    }
    return stage + 1;
 }
@@ -879,6 +896,7 @@ _mongoc_structured_log_append_error (bson_t *bson,
                                      const mongoc_structured_log_builder_stage_t *stage,
                                      const mongoc_structured_log_opts_t *opts)
 {
+   BSON_UNUSED (opts);
    const char *key_or_null = stage->arg1.utf8;
    const bson_error_t *error_or_null = stage->arg2.error;
    if (key_or_null) {
@@ -1022,10 +1040,9 @@ _mongoc_structured_log_append_server_description (bson_t *bson,
    return stage + 1;
 }
 
-const mongoc_structured_log_builder_stage_t *
-_mongoc_structured_log_append_topology_as_description_json (bson_t *bson,
-                                                            const mongoc_structured_log_builder_stage_t *stage,
-                                                            const mongoc_structured_log_opts_t *opts)
+static mcommon_string_t *
+_mongoc_structured_log_topology_description_as_json (const mongoc_topology_description_t *td,
+                                                     const mongoc_structured_log_opts_t *opts)
 {
    const mongoc_topology_description_content_flags_t td_flags =
       MONGOC_TOPOLOGY_DESCRIPTION_CONTENT_FLAG_TYPE | MONGOC_TOPOLOGY_DESCRIPTION_CONTENT_FLAG_SET_NAME |
@@ -1038,22 +1055,53 @@ _mongoc_structured_log_append_topology_as_description_json (bson_t *bson,
    const mongoc_server_description_content_flags_t server_flags =
       MONGOC_SERVER_DESCRIPTION_CONTENT_FLAG_TYPE | MONGOC_SERVER_DESCRIPTION_CONTENT_FLAG_ADDRESS;
 
+   bson_t doc = BSON_INITIALIZER;
+   mongoc_topology_description_append_contents_to_bson (td, &doc, td_flags, server_flags);
+   mcommon_string_t *result = _mongoc_structured_log_document_as_truncated_json (&doc, opts);
+   bson_destroy (&doc);
+   return result;
+}
+
+const mongoc_structured_log_builder_stage_t *
+_mongoc_structured_log_append_topology_as_description_json (bson_t *bson,
+                                                            const mongoc_structured_log_builder_stage_t *stage,
+                                                            const mongoc_structured_log_opts_t *opts)
+{
    const char *key_or_null = stage->arg1.utf8;
    const mongoc_topology_t *topology_or_null = stage->arg2.topology;
    if (key_or_null) {
       if (topology_or_null) {
          mc_shared_tpld td = mc_tpld_take_ref (topology_or_null);
-         bson_t inner_bson = BSON_INITIALIZER;
-         mongoc_topology_description_append_contents_to_bson (td.ptr, &inner_bson, td_flags, server_flags);
-         mcommon_string_t *json = _mongoc_structured_log_document_as_truncated_json (&inner_bson, opts);
+         mcommon_string_t *json = _mongoc_structured_log_topology_description_as_json (td.ptr, opts);
          if (json) {
             BSON_ASSERT (json->len <= (uint32_t) INT_MAX);
             bson_append_utf8 (bson, key_or_null, -1, json->str, (int) json->len);
             mcommon_string_destroy (json);
          }
-         // If invalid BSON was found in the input, the key is not logged.
-         bson_destroy (&inner_bson);
          mc_tpld_drop_ref (&td);
+      } else {
+         bson_append_null (bson, key_or_null, -1);
+      }
+   }
+   return stage + 1;
+}
+
+const mongoc_structured_log_builder_stage_t *
+_mongoc_structured_log_append_topology_description_as_json (bson_t *bson,
+                                                            const mongoc_structured_log_builder_stage_t *stage,
+                                                            const mongoc_structured_log_opts_t *opts)
+{
+   const char *key_or_null = stage->arg1.utf8;
+   const mongoc_topology_description_t *topology_description_or_null = stage->arg2.topology_description;
+   if (key_or_null) {
+      if (topology_description_or_null) {
+         mcommon_string_t *json =
+            _mongoc_structured_log_topology_description_as_json (topology_description_or_null, opts);
+         if (json) {
+            BSON_ASSERT (json->len <= (uint32_t) INT_MAX);
+            bson_append_utf8 (bson, key_or_null, -1, json->str, (int) json->len);
+            mcommon_string_destroy (json);
+         }
       } else {
          bson_append_null (bson, key_or_null, -1);
       }

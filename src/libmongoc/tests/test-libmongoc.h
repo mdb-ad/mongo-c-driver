@@ -36,12 +36,7 @@ char *
 gen_collection_name (const char *prefix);
 mongoc_collection_t *
 get_test_collection (mongoc_client_t *client, const char *prefix);
-bool
-test_is_suppressing_structured_logs (void);
-void
-test_begin_suppressing_structured_logs (void);
-void
-test_end_suppressing_structured_logs (void);
+
 void
 capture_logs (bool capture);
 void
@@ -221,6 +216,8 @@ WIRE_VERSION_CHECK_DECLS (23)
 WIRE_VERSION_CHECK_DECLS (24)
 /* wire version 25 begins with the 8.0 release. */
 WIRE_VERSION_CHECK_DECLS (25)
+/* wire version 26 begins with the 8.1 release. */
+WIRE_VERSION_CHECK_DECLS (26)
 
 #undef WIRE_VERSION_CHECK_DECLS
 

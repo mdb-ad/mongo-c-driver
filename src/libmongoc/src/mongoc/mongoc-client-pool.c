@@ -23,6 +23,8 @@
 #include <mongoc/mongoc-client-pool.h>
 #include <mongoc/mongoc-client-private.h>
 #include <mongoc/mongoc-client-side-encryption-private.h>
+#include <mongoc/mongoc-error-private.h>
+#include <mongoc/mongoc-log-and-monitor-private.h>
 #include <mongoc/mongoc-queue-private.h>
 #include <mongoc/mongoc-thread-private.h>
 #include <mongoc/mongoc-topology-private.h>
@@ -43,7 +45,6 @@ struct _mongoc_client_pool_t {
    mongoc_queue_t queue;
    mongoc_topology_t *topology;
    mongoc_uri_t *uri;
-   uint32_t min_pool_size;
    uint32_t max_pool_size;
    uint32_t size;
 #ifdef MONGOC_ENABLE_SSL
@@ -54,8 +55,6 @@ struct _mongoc_client_pool_t {
    bool error_api_set;
    bool structured_log_opts_set;
    bool client_initialized;
-   mongoc_apm_callbacks_t apm_callbacks;
-   void *apm_context;
    int32_t error_api_version;
    mongoc_server_api_t *api;
    // `last_known_serverids` is a sorted array of uint32_t.
@@ -137,13 +136,22 @@ mongoc_client_pool_new_with_error (const mongoc_uri_t *uri, bson_error_t *error)
 
    BSON_ASSERT (uri);
 
+   extern bool mongoc_get_init_called (void);
+   if (!mongoc_get_init_called ()) {
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_CLIENT,
+                         MONGOC_ERROR_CLIENT_NOT_READY,
+                         "Attempting to create client pool, but libmongoc not initialized. Call mongoc_init");
+      return NULL;
+   }
+
 #ifndef MONGOC_ENABLE_SSL
    if (mongoc_uri_get_tls (uri)) {
-      bson_set_error (error,
-                      MONGOC_ERROR_COMMAND,
-                      MONGOC_ERROR_COMMAND_INVALID_ARG,
-                      "Can't create SSL client pool, SSL not enabled in this "
-                      "build.");
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_COMMAND,
+                         MONGOC_ERROR_COMMAND_INVALID_ARG,
+                         "Can't create SSL client pool, SSL not enabled in this "
+                         "build.");
       return NULL;
    }
 #endif
@@ -166,22 +174,12 @@ mongoc_client_pool_new_with_error (const mongoc_uri_t *uri, bson_error_t *error)
    mongoc_cond_init (&pool->cond);
    _mongoc_queue_init (&pool->queue);
    pool->uri = mongoc_uri_copy (uri);
-   pool->min_pool_size = 0;
    pool->max_pool_size = 100;
    pool->size = 0;
    pool->topology = topology;
    pool->error_api_version = MONGOC_ERROR_API_VERSION_LEGACY;
 
    b = mongoc_uri_get_options (pool->uri);
-
-   if (bson_iter_init_find_case (&iter, b, MONGOC_URI_MINPOOLSIZE)) {
-      MONGOC_WARNING (MONGOC_URI_MINPOOLSIZE " is deprecated; its behavior does not match its name, and its actual"
-                                             " behavior will likely hurt performance.");
-
-      if (BSON_ITER_HOLDS_INT32 (&iter)) {
-         pool->min_pool_size = BSON_MAX (0, bson_iter_int32 (&iter));
-      }
-   }
 
    if (bson_iter_init_find_case (&iter, b, MONGOC_URI_MAXPOOLSIZE)) {
       if (BSON_ITER_HOLDS_INT32 (&iter)) {
@@ -278,18 +276,17 @@ _initialize_new_client (mongoc_client_pool_t *pool, mongoc_client_t *client)
    BSON_ASSERT_PARAM (client);
 
    /* for tests */
-   mongoc_client_set_stream_initiator (
+   _mongoc_client_set_stream_initiator_single_or_pooled (
       client, pool->topology->scanner->initiator, pool->topology->scanner->initiator_context);
 
    pool->client_initialized = true;
    client->error_api_version = pool->error_api_version;
-   _mongoc_client_set_apm_callbacks_private (client, &pool->apm_callbacks, pool->apm_context);
 
    client->api = mongoc_server_api_copy (pool->api);
 
 #ifdef MONGOC_ENABLE_SSL
    if (pool->ssl_opts_set) {
-      mongoc_client_set_ssl_opts (client, &pool->ssl_opts);
+      _mongoc_client_set_ssl_opts_for_single_or_pooled (client, &pool->ssl_opts);
    }
 #endif
 }
@@ -478,15 +475,6 @@ mongoc_client_pool_push (mongoc_client_pool_t *pool, mongoc_client_t *client)
    // Push client back into pool.
    _mongoc_queue_push_head (&pool->queue, client);
 
-   if (pool->min_pool_size && _mongoc_queue_get_length (&pool->queue) > pool->min_pool_size) {
-      mongoc_client_t *old_client;
-      old_client = (mongoc_client_t *) _mongoc_queue_pop_tail (&pool->queue);
-      if (old_client) {
-         mongoc_client_destroy (old_client);
-         pool->size--;
-      }
-   }
-
    mongoc_cond_signal (&pool->cond);
    bson_mutex_unlock (&pool->mutex);
 
@@ -557,55 +545,32 @@ mongoc_client_pool_max_size (mongoc_client_pool_t *pool, uint32_t max_pool_size)
    EXIT;
 }
 
-void
-mongoc_client_pool_min_size (mongoc_client_pool_t *pool, uint32_t min_pool_size)
-{
-   ENTRY;
-   BSON_ASSERT_PARAM (pool);
-
-   MONGOC_WARNING ("mongoc_client_pool_min_size is deprecated; its behavior does not match"
-                   " its name, and its actual behavior will likely hurt performance.");
-
-   bson_mutex_lock (&pool->mutex);
-   pool->min_pool_size = min_pool_size;
-   bson_mutex_unlock (&pool->mutex);
-
-   EXIT;
-}
-
 bool
 mongoc_client_pool_set_apm_callbacks (mongoc_client_pool_t *pool, mongoc_apm_callbacks_t *callbacks, void *context)
 {
    BSON_ASSERT_PARAM (pool);
+   BSON_OPTIONAL_PARAM (callbacks);
+   BSON_OPTIONAL_PARAM (context);
 
-   mongoc_topology_t *const topology = BSON_ASSERT_PTR_INLINE (pool)->topology;
-   mc_tpld_modification tdmod = mc_tpld_modify_begin (topology);
-
-   // Prevent setting callbacks more than once
+   // Enforce documented thread-safety restrictions
    if (pool->apm_callbacks_set) {
-      mc_tpld_modify_drop (tdmod);
-      MONGOC_ERROR ("Can only set callbacks once");
+      MONGOC_ERROR ("mongoc_client_pool_set_apm_callbacks can only be called once per pool");
       return false;
-   }
+   } else if (pool->client_initialized) {
+      MONGOC_ERROR ("mongoc_client_pool_set_apm_callbacks can only be called before mongoc_client_pool_pop");
+      /* @todo Since 2017 this requirement has been documented but not actually enforced. For now we are leaving it
+       * unenforced, for backward compatibility. This usage remains unsafe and incorrect. When possible, this should be
+       * modified to return false without modifying the APM callbacks. */
+      mongoc_log_and_monitor_instance_set_apm_callbacks (&pool->topology->log_and_monitor, callbacks, context);
+      pool->apm_callbacks_set = true;
+      return true;
 
-   // Update callbacks on the pool
-   if (callbacks) {
-      pool->apm_callbacks = *callbacks;
    } else {
-      pool->apm_callbacks = (mongoc_apm_callbacks_t){0};
+      // Now we can be sure no other threads are relying on concurrent access to the instance yet.
+      mongoc_log_and_monitor_instance_set_apm_callbacks (&pool->topology->log_and_monitor, callbacks, context);
+      pool->apm_callbacks_set = true;
+      return true;
    }
-   pool->apm_context = context;
-
-   // Update callbacks on the topology
-   mongoc_topology_set_apm_callbacks (topology, tdmod.new_td, callbacks, context);
-
-   // Signal that we have already set the callbacks
-   pool->apm_callbacks_set = true;
-
-   // Save our updated topology
-   mc_tpld_modify_commit (tdmod);
-
-   return true;
 }
 
 bool
@@ -618,14 +583,14 @@ mongoc_client_pool_set_structured_log_opts (mongoc_client_pool_t *pool, const mo
     * and only before the first client is initialized. Structured logging is generally
     * expected to warn but not quit when encountering initialization errors. */
    if (pool->structured_log_opts_set) {
-      MONGOC_WARNING ("mongoc_client_pool_set_structured_log_opts can only be called once per pool");
+      MONGOC_ERROR ("mongoc_client_pool_set_structured_log_opts can only be called once per pool");
       return false;
    } else if (pool->client_initialized) {
-      MONGOC_WARNING ("mongoc_client_pool_set_structured_log_opts can only be called before mongoc_client_pool_pop");
+      MONGOC_ERROR ("mongoc_client_pool_set_structured_log_opts can only be called before mongoc_client_pool_pop");
       return false;
    } else {
       // Now we can be sure no other threads are relying on concurrent access to the instance yet.
-      mongoc_topology_set_structured_log_opts (pool->topology, opts);
+      mongoc_log_and_monitor_instance_set_structured_log_opts (&pool->topology->log_and_monitor, opts);
       pool->structured_log_opts_set = true;
       return true;
    }
@@ -683,16 +648,16 @@ mongoc_client_pool_set_server_api (mongoc_client_pool_t *pool, const mongoc_serv
    BSON_ASSERT_PARAM (api);
 
    if (pool->api) {
-      bson_set_error (
+      _mongoc_set_error (
          error, MONGOC_ERROR_POOL, MONGOC_ERROR_POOL_API_ALREADY_SET, "Cannot set server api more than once per pool");
       return false;
    }
 
    if (pool->client_initialized) {
-      bson_set_error (error,
-                      MONGOC_ERROR_POOL,
-                      MONGOC_ERROR_POOL_API_TOO_LATE,
-                      "Cannot set server api after a client has been created");
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_POOL,
+                         MONGOC_ERROR_POOL_API_TOO_LATE,
+                         "Cannot set server api after a client has been created");
       return false;
    }
 

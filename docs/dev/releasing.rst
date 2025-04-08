@@ -346,7 +346,7 @@ to post the release to GitHub:
 
    $ python $CDRIVER_TOOLS/release.py upload $GITHUB_TOKEN
 
-Update the ``VERSION_CURRENT`` file on the release branch::
+Update the :file:`VERSION_CURRENT` file on the release branch::
 
    $ python $CDRIVER_TOOLS/release.py post_release_bump
 
@@ -381,15 +381,15 @@ running :any:`+signed-release`, one will need to set up some environment that is
 required for it to succeed:
 
 1. :ref:`Authenticate with Artifactory <earthly.artifactory-auth>`
-2. Set the Earthly secrets required for the :any:`+sign-file` and
-   :any:`+sbom-download` targets.
+2. Set the Earthly secrets required for the :any:`+sign-file` target.
+3. Download an augmented SBOM from a recent execution of the ``sbom`` task in
+   an Evergreen patch or commit build and save it to ``etc/augmented-sbom.json``.
 
 Once these prerequesites are met, creating the release archive can be done using
 the :any:`+signed-release` target.::
 
-   $ ./tools/earthly.sh --artifact +signed-release/dist dist --sbom_branch=$SBOM_BRANCH --version=$NEW_VERSION
+   $ ./tools/earthly.sh --artifact +signed-release/dist dist --version=$NEW_VERSION
 
-.. note:: `$SBOM_BRANCH` must be ``master`` for a minor release, or ``$RELEASE_BRANCH`` for a patch release.
 .. note:: `$NEW_VERSION` must correspond to the Git tag created by the release.
 
 The above command will create a `dist/` directory in the working directory that
@@ -464,12 +464,17 @@ publish a PR to merge the updates to the release files back into ``master``::
 (Here we have named the branch ``post-release-merge``, but the branch name is
 arbitrary.)
 
-Manually update the ``NEWS`` and ``src/libbson/NEWS`` files with the content
-from the release branch that we just published. Commit these changes to the new
-branch.
+Do the following:
 
-For a minor release, manually update the ``VERSION_CURRENT`` file. Example if
-``1.28.0`` was just released, update to ``1.29.0-dev``.
+1. Manually update the ``NEWS`` and ``src/libbson/NEWS`` files with the content
+   from the release branch that we just published. Commit these changes to the
+   new branch.
+2. For a non-patch release, manually update the :file:`VERSION_CURRENT` file.
+   Example: if ``1.28.0`` was just released, update to ``1.29.0-dev``.
+3. For a non-patch release, update the :file:`etc/prior_version.txt` file to
+   contain the version that you have just released. This text should match the
+   generated Git tag. (The tag should always be an ancestor of the branch that
+   contains that :file:`etc/prior_version.txt`.)
 
 Push this branch to your fork of the repository::
 
@@ -633,4 +638,3 @@ updating the mongo-cxx-driver container image files to use the newly released C 
 version. `Details for this process are documented here`__
 
 __ https://github.com/mongodb/mongo-cxx-driver/blob/5f2077f98140ea656983ea5881de31d73bb3f735/etc/releasing.md#docker-image-build-and-publish
-

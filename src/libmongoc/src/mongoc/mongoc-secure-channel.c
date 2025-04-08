@@ -28,9 +28,9 @@
 #include <mongoc/mongoc-secure-channel-private.h>
 #include <mongoc/mongoc-stream-tls-secure-channel-private.h>
 #include <mongoc/mongoc-errno-private.h>
-#include <mongoc/mongoc-error.h>
+#include <mongoc/mongoc-error-private.h>
 #include <common-string-private.h>
-#include <common-cmp-private.h>
+#include <mlib/cmp.h>
 
 
 #undef MONGOC_LOG_DOMAIN
@@ -64,7 +64,7 @@ mongoc_secure_channel_setup_certificate_from_file (const char *filename)
    file = fopen (filename, "rb");
    if (!file) {
       MONGOC_ERROR ("Couldn't open file '%s'", filename);
-      return false;
+      return NULL;
    }
 
    fseek (file, 0, SEEK_END);
@@ -72,7 +72,7 @@ mongoc_secure_channel_setup_certificate_from_file (const char *filename)
    fseek (file, 0, SEEK_SET);
    if (pem_length < 1) {
       MONGOC_ERROR ("Couldn't determine file size of '%s'", filename);
-      return false;
+      return NULL;
    }
 
    pem = (char *) bson_malloc0 (pem_length);
@@ -297,14 +297,20 @@ mongoc_secure_channel_setup_ca (mongoc_stream_tls_secure_channel_t *secure_chann
    fseek (file, 0, SEEK_END);
    length = ftell (file);
    fseek (file, 0, SEEK_SET);
-   if (length < 1) {
+   if (length < 1 || length > LONG_MAX - 1) {
       MONGOC_WARNING ("Couldn't determine file size of '%s'", opt->ca_file);
+      fclose (file);
       return false;
    }
 
-   pem_key = (const char *) bson_malloc0 (length);
-   fread ((void *) pem_key, 1, length, file);
+   // Read the whole file into one nul-terminated string
+   pem_key = (const char *) bson_malloc0 ((size_t) length + 1u);
+   bool read_ok = (size_t) length == fread ((void *) pem_key, 1, length, file);
    fclose (file);
+   if (!read_ok) {
+      MONGOC_WARNING ("Couldn't read certificate file '%s'", opt->ca_file);
+      return false;
+   }
 
    /* If we have private keys or other fuzz, seek to the good stuff */
    pem_key = strstr (pem_key, "-----BEGIN CERTIFICATE-----");
@@ -425,7 +431,7 @@ mongoc_secure_channel_read (mongoc_stream_tls_t *tls, void *data, size_t data_le
 {
    BSON_ASSERT_PARAM (tls);
 
-   if (BSON_UNLIKELY (!mcommon_in_range_signed (int32_t, tls->timeout_msec))) {
+   if (BSON_UNLIKELY (!mlib_in_range (int32_t, tls->timeout_msec))) {
       // CDRIVER-4589
       MONGOC_ERROR ("timeout_msec value %" PRId64 " exceeds supported 32-bit range", tls->timeout_msec);
       return -1;
@@ -453,7 +459,7 @@ mongoc_secure_channel_write (mongoc_stream_tls_t *tls, const void *data, size_t 
 {
    BSON_ASSERT_PARAM (tls);
 
-   if (BSON_UNLIKELY (!mcommon_in_range_signed (int32_t, tls->timeout_msec))) {
+   if (BSON_UNLIKELY (!mlib_in_range (int32_t, tls->timeout_msec))) {
       // CDRIVER-4589
       MONGOC_ERROR ("timeout_msec value %" PRId64 " exceeds supported 32-bit range", tls->timeout_msec);
       return -1;
@@ -527,10 +533,10 @@ _mongoc_secure_channel_init_sec_buffer_desc (SecBufferDesc *desc, SecBuffer *buf
 }
 
 
-#define MONGOC_LOG_AND_SET_ERROR(ERROR, DOMAIN, CODE, ...) \
-   do {                                                    \
-      MONGOC_ERROR (__VA_ARGS__);                          \
-      bson_set_error (ERROR, DOMAIN, CODE, __VA_ARGS__);   \
+#define MONGOC_LOG_AND_SET_ERROR(ERROR, DOMAIN, CODE, ...)  \
+   do {                                                     \
+      MONGOC_ERROR (__VA_ARGS__);                           \
+      _mongoc_set_error (ERROR, DOMAIN, CODE, __VA_ARGS__); \
    } while (0)
 
 bool

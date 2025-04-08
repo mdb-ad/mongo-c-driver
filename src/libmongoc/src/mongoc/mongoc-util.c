@@ -24,6 +24,7 @@
 
 #include <common-md5-private.h>
 #include <common-thread-private.h>
+#include <mongoc/mongoc-error-private.h>
 #include <mongoc/mongoc-rand-private.h>
 #include <mongoc/mongoc-util-private.h>
 #include <mongoc/mongoc-client.h>
@@ -31,7 +32,8 @@
 #include <mongoc/mongoc-client-session-private.h>
 #include <mongoc/mongoc-trace-private.h>
 #include <mongoc/mongoc-sleep.h>
-#include <common-cmp-private.h>
+#include <mlib/cmp.h>
+#include <mlib/loop.h>
 
 const bson_validate_flags_t _mongoc_default_insert_vflags =
    BSON_VALIDATE_UTF8 | BSON_VALIDATE_UTF8_ALLOW_NULL | BSON_VALIDATE_EMPTY_KEYS;
@@ -68,13 +70,12 @@ _mongoc_hex_md5 (const char *input)
    uint8_t digest[16];
    bson_md5_t md5;
    char digest_str[33];
-   int i;
 
    mcommon_md5_init (&md5);
    mcommon_md5_append (&md5, (const uint8_t *) input, (uint32_t) strlen (input));
    mcommon_md5_finish (&md5, digest);
 
-   for (i = 0; i < sizeof digest; i++) {
+   mlib_foreach_urange (i, sizeof digest) {
       // Expect no truncation.
       int req = bson_snprintf (&digest_str[i * 2], 3, "%02x", digest[i]);
       BSON_ASSERT (req < 3);
@@ -316,41 +317,6 @@ _mongoc_wire_version_to_server_version (int32_t version)
 }
 
 
-/* Get "serverId" from opts. Sets *server_id to the serverId from "opts" or 0
- * if absent. On error, fills out *error with domain and code and return false.
- */
-bool
-_mongoc_get_server_id_from_opts (
-   const bson_t *opts, mongoc_error_domain_t domain, mongoc_error_code_t code, uint32_t *server_id, bson_error_t *error)
-{
-   bson_iter_t iter;
-
-   ENTRY;
-
-   BSON_ASSERT (server_id);
-
-   *server_id = 0;
-
-   if (!opts || !bson_iter_init_find (&iter, opts, "serverId")) {
-      RETURN (true);
-   }
-
-   if (!BSON_ITER_HOLDS_INT (&iter)) {
-      bson_set_error (error, domain, code, "The serverId option must be an integer");
-      RETURN (false);
-   }
-
-   if (bson_iter_as_int64 (&iter) <= 0) {
-      bson_set_error (error, domain, code, "The serverId option must be >= 1");
-      RETURN (false);
-   }
-
-   *server_id = (uint32_t) bson_iter_as_int64 (&iter);
-
-   RETURN (true);
-}
-
-
 bool
 _mongoc_validate_new_document (const bson_t *doc, bson_validate_flags_t vflags, bson_error_t *error)
 {
@@ -361,11 +327,11 @@ _mongoc_validate_new_document (const bson_t *doc, bson_validate_flags_t vflags, 
    }
 
    if (!bson_validate_with_error (doc, vflags, &validate_err)) {
-      bson_set_error (error,
-                      MONGOC_ERROR_COMMAND,
-                      MONGOC_ERROR_COMMAND_INVALID_ARG,
-                      "invalid document for insert: %s",
-                      validate_err.message);
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_COMMAND,
+                         MONGOC_ERROR_COMMAND_INVALID_ARG,
+                         "invalid document for insert: %s",
+                         validate_err.message);
       return false;
    }
 
@@ -385,27 +351,27 @@ _mongoc_validate_replace (const bson_t *doc, bson_validate_flags_t vflags, bson_
    }
 
    if (!bson_validate_with_error (doc, vflags, &validate_err)) {
-      bson_set_error (error,
-                      MONGOC_ERROR_COMMAND,
-                      MONGOC_ERROR_COMMAND_INVALID_ARG,
-                      "invalid argument for replace: %s",
-                      validate_err.message);
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_COMMAND,
+                         MONGOC_ERROR_COMMAND_INVALID_ARG,
+                         "invalid argument for replace: %s",
+                         validate_err.message);
       return false;
    }
 
    if (!bson_iter_init (&iter, doc)) {
-      bson_set_error (error, MONGOC_ERROR_BSON, MONGOC_ERROR_BSON_INVALID, "replace document is corrupt");
+      _mongoc_set_error (error, MONGOC_ERROR_BSON, MONGOC_ERROR_BSON_INVALID, "replace document is corrupt");
       return false;
    }
 
    while (bson_iter_next (&iter)) {
       key = bson_iter_key (&iter);
       if (key[0] == '$') {
-         bson_set_error (error,
-                         MONGOC_ERROR_COMMAND,
-                         MONGOC_ERROR_COMMAND_INVALID_ARG,
-                         "Invalid key '%s': replace prohibits $ operators",
-                         key);
+         _mongoc_set_error (error,
+                            MONGOC_ERROR_COMMAND,
+                            MONGOC_ERROR_COMMAND_INVALID_ARG,
+                            "Invalid key '%s': replace prohibits $ operators",
+                            key);
 
          return false;
       }
@@ -427,11 +393,11 @@ _mongoc_validate_update (const bson_t *update, bson_validate_flags_t vflags, bso
    }
 
    if (!bson_validate_with_error (update, vflags, &validate_err)) {
-      bson_set_error (error,
-                      MONGOC_ERROR_COMMAND,
-                      MONGOC_ERROR_COMMAND_INVALID_ARG,
-                      "invalid argument for update: %s",
-                      validate_err.message);
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_COMMAND,
+                         MONGOC_ERROR_COMMAND_INVALID_ARG,
+                         "invalid argument for update: %s",
+                         validate_err.message);
       return false;
    }
 
@@ -440,19 +406,19 @@ _mongoc_validate_update (const bson_t *update, bson_validate_flags_t vflags, bso
    }
 
    if (!bson_iter_init (&iter, update)) {
-      bson_set_error (error, MONGOC_ERROR_BSON, MONGOC_ERROR_BSON_INVALID, "update document is corrupt");
+      _mongoc_set_error (error, MONGOC_ERROR_BSON, MONGOC_ERROR_BSON_INVALID, "update document is corrupt");
       return false;
    }
 
    while (bson_iter_next (&iter)) {
       key = bson_iter_key (&iter);
       if (key[0] != '$') {
-         bson_set_error (error,
-                         MONGOC_ERROR_COMMAND,
-                         MONGOC_ERROR_COMMAND_INVALID_ARG,
-                         "Invalid key '%s': update only works with $ operators"
-                         " and pipelines",
-                         key);
+         _mongoc_set_error (error,
+                            MONGOC_ERROR_COMMAND,
+                            MONGOC_ERROR_COMMAND_INVALID_ARG,
+                            "Invalid key '%s': update only works with $ operators"
+                            " and pipelines",
+                            key);
 
          return false;
       }
@@ -969,21 +935,21 @@ _mongoc_iter_document_as_bson (const bson_iter_t *iter, bson_t *bson, bson_error
    const uint8_t *data;
 
    if (!BSON_ITER_HOLDS_DOCUMENT (iter)) {
-      bson_set_error (error,
-                      MONGOC_ERROR_COMMAND,
-                      MONGOC_ERROR_COMMAND_INVALID_ARG,
-                      "expected BSON document for field: %s",
-                      bson_iter_key (iter));
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_COMMAND,
+                         MONGOC_ERROR_COMMAND_INVALID_ARG,
+                         "expected BSON document for field: %s",
+                         bson_iter_key (iter));
       return false;
    }
 
    bson_iter_document (iter, &len, &data);
    if (!bson_init_static (bson, data, len)) {
-      bson_set_error (error,
-                      MONGOC_ERROR_COMMAND,
-                      MONGOC_ERROR_COMMAND_INVALID_ARG,
-                      "unable to initialize BSON document from field: %s",
-                      bson_iter_key (iter));
+      _mongoc_set_error (error,
+                         MONGOC_ERROR_COMMAND,
+                         MONGOC_ERROR_COMMAND_INVALID_ARG,
+                         "unable to initialize BSON document from field: %s",
+                         bson_iter_key (iter));
       return false;
    }
 
@@ -1000,7 +966,7 @@ hex_to_bin (const char *hex, uint32_t *len)
       return NULL;
    }
 
-   BSON_ASSERT (mcommon_in_range_unsigned (uint32_t, hex_len / 2u));
+   BSON_ASSERT (mlib_in_range (uint32_t, hex_len / 2u));
 
    *len = (uint32_t) (hex_len / 2u);
    out = bson_malloc0 (*len);
@@ -1013,7 +979,7 @@ hex_to_bin (const char *hex, uint32_t *len)
          return NULL;
       }
 
-      BSON_ASSERT (mcommon_in_range_unsigned (uint8_t, hex_char));
+      BSON_ASSERT (mlib_in_range (uint8_t, hex_char));
       out[i / 2u] = (uint8_t) hex_char;
    }
    return out;
