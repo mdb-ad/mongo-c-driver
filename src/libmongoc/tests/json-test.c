@@ -1368,7 +1368,7 @@ set_auto_encryption_opts (mongoc_client_t *client, bson_t *opts)
 
    auto_encryption_opts = mongoc_auto_encryption_opts_new ();
 
-   if (bson_iter_init_find (&iter, &opts, "kmsProviders")) {
+   if (bson_iter_init_find (&iter, opts, "kmsProviders")) {
       bson_t kms_providers = BSON_INITIALIZER;
       bson_t tls_opts = BSON_INITIALIZER;
       bson_t tmp;

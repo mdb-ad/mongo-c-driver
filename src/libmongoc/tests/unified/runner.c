@@ -1394,8 +1394,7 @@ test_check_expected_events_for_client (test_t *test, bson_t *expected_events_for
    }
 
    int expected_num_events = bson_count_keys (expected_events);
-   uint32_t actual_num_events = 0;
-   event_t *eiter;
+   int actual_num_events = 0;
    LL_FOREACH (entity->events, eiter)
    {
       if (event_matches_eventtype (eiter, event_type)) {
@@ -1412,20 +1411,18 @@ test_check_expected_events_for_client (test_t *test, bson_t *expected_events_for
       }
 
    if (expected_num_events != actual_num_events) {
-      bool too_many_events = actual_num_events > expected_num_events;
       if (ignore_extra_events && *ignore_extra_events) {
          // We can never have too many events
          too_many_events = false;
       }
       if (too_few_events || too_many_events) {
          test_set_error (
-            error, "expected: %" PRIu32 " events but got %" PRIu32, expected_num_events, actual_num_events);
+            error, "expected: %" PRIi32 " events but got %" PRIi32, expected_num_events, actual_num_events);
          goto done;
       }
    }
 
    eiter = entity->events;
-   bson_iter_t iter;
    BSON_FOREACH (expected_events, iter)
    {
       bool matched = false;
