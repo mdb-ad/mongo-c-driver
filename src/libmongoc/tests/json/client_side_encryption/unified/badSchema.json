@@ -11,6 +11,7 @@
       "client": {
         "id": "client0",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "schemaMap": {
             "default.default": {
               "properties": {
@@ -39,9 +40,6 @@
               },
               "secretAccessKey": {
                 "$$placeholder": 1
-              },
-              "sessionToken": {
-                "$$placeholder": 1
               }
             }
           }
@@ -69,6 +67,7 @@
       "client": {
         "id": "client1",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "schemaMap": {
             "default.default": {
               "properties": {
@@ -100,9 +99,6 @@
               },
               "secretAccessKey": {
                 "$$placeholder": 1
-              },
-              "sessionToken": {
-                "$$placeholder": 1
               }
             }
           }
@@ -130,6 +126,7 @@
       "client": {
         "id": "client2",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "schemaMap": {
             "default.default": {
               "properties": {
@@ -158,9 +155,6 @@
               },
               "secretAccessKey": {
                 "$$placeholder": 1
-              },
-              "sessionToken": {
-                "$$placeholder": 1
               }
             }
           }
@@ -188,6 +182,7 @@
       "client": {
         "id": "client3",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "schemaMap": {
             "default.default": {
               "anyOf": [
@@ -218,9 +213,6 @@
                 "$$placeholder": 1
               },
               "secretAccessKey": {
-                "$$placeholder": 1
-              },
-              "sessionToken": {
                 "$$placeholder": 1
               }
             }

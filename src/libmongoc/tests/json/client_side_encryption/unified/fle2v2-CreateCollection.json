@@ -16,15 +16,13 @@
       "client": {
         "id": "client0",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "kmsProviders": {
             "aws": {
               "accessKeyId": {
                 "$$placeholder": 1
               },
               "secretAccessKey": {
-                "$$placeholder": 1
-              },
-              "sessionToken": {
                 "$$placeholder": 1
               }
             }
@@ -69,15 +67,13 @@
       "client": {
         "id": "client1",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "kmsProviders": {
             "aws": {
               "accessKeyId": {
                 "$$placeholder": 1
               },
               "secretAccessKey": {
-                "$$placeholder": 1
-              },
-              "sessionToken": {
                 "$$placeholder": 1
               }
             }
@@ -117,15 +113,13 @@
       "client": {
         "id": "client2",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "kmsProviders": {
             "aws": {
               "accessKeyId": {
                 "$$placeholder": 1
               },
               "secretAccessKey": {
-                "$$placeholder": 1
-              },
-              "sessionToken": {
                 "$$placeholder": 1
               }
             }

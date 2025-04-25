@@ -11,6 +11,7 @@
       "client": {
         "id": "client0",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "bypassAutoEncryption": true,
           "kmsProviders": {
             "aws": {
@@ -18,9 +19,6 @@
                 "$$placeholder": 1
               },
               "secretAccessKey": {
-                "$$placeholder": 1
-              },
-              "sessionToken": {
                 "$$placeholder": 1
               }
             }

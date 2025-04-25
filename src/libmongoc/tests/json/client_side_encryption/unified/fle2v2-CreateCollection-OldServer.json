@@ -17,15 +17,13 @@
       "client": {
         "id": "client0",
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "kmsProviders": {
             "aws": {
               "accessKeyId": {
                 "$$placeholder": 1
               },
               "secretAccessKey": {
-                "$$placeholder": 1
-              },
-              "sessionToken": {
                 "$$placeholder": 1
               }
             }
