@@ -367,8 +367,8 @@ prose_test_4 (void *ctx)
    }
 
    mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, NULL /* options */);
-   ASSERT_NO_BULKWRITEEXCEPTION (ret);
    ASSERT (ret.res);
+   ASSERT_NO_BULKWRITEEXCEPTION (ret);
    ASSERT_CMPINT64 (mongoc_bulkwriteresult_insertedcount (ret.res), ==, numModels);
    mongoc_bulkwriteexception_destroy (ret.exc);
    mongoc_bulkwriteresult_destroy (ret.res);
@@ -466,6 +466,7 @@ prose_test_5 (void *ctx)
    }
 
    mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, NULL /* options */);
+   ASSERT (ret.res); // Has partial results.
    ASSERT (ret.exc);
 
    // Expect no top-level error.
@@ -536,6 +537,7 @@ prose_test_6 (void *ctx)
       mongoc_bulkwriteopts_t *opts = mongoc_bulkwriteopts_new ();
       mongoc_bulkwriteopts_set_ordered (opts, false);
       mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, opts);
+      ASSERT (!ret.res); // No result due to no successful writes.
       ASSERT (ret.exc);
 
       if (mongoc_bulkwriteexception_error (ret.exc, &error)) {
@@ -575,6 +577,7 @@ prose_test_6 (void *ctx)
       mongoc_bulkwriteopts_t *opts = mongoc_bulkwriteopts_new ();
       mongoc_bulkwriteopts_set_ordered (opts, true);
       mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, opts);
+      ASSERT (!ret.res); // No result due to no successful writes.
       ASSERT (ret.exc);
 
       if (mongoc_bulkwriteexception_error (ret.exc, &error)) {
@@ -656,7 +659,7 @@ prose_test_7 (void *ctx)
    mongoc_bulkwriteopts_t *opts = mongoc_bulkwriteopts_new ();
    mongoc_bulkwriteopts_set_verboseresults (opts, true);
    mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, opts);
-
+   ASSERT (ret.res);
    ASSERT_NO_BULKWRITEEXCEPTION (ret);
 
    ASSERT_CMPINT64 (mongoc_bulkwriteresult_upsertedcount (ret.res), ==, 2);
@@ -742,7 +745,7 @@ prose_test_8 (void *ctx)
    mongoc_bulkwriteopts_t *opts = mongoc_bulkwriteopts_new ();
    mongoc_bulkwriteopts_set_verboseresults (opts, true);
    mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, opts);
-
+   ASSERT (ret.res);
    ASSERT_NO_BULKWRITEEXCEPTION (ret);
 
    ASSERT_CMPINT64 (mongoc_bulkwriteresult_upsertedcount (ret.res), ==, 2);
@@ -843,13 +846,13 @@ prose_test_9 (void *ctx)
    mongoc_bulkwriteopts_t *opts = mongoc_bulkwriteopts_new ();
    mongoc_bulkwriteopts_set_verboseresults (opts, true);
    mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, opts);
+   ASSERT (ret.res);
    ASSERT (ret.exc);
 
    if (!mongoc_bulkwriteexception_error (ret.exc, &error)) {
       test_error ("Expected top-level error but got:\n%s", test_bulkwriteexception_str (ret.exc));
    }
    ASSERT_ERROR_CONTAINS (error, MONGOC_ERROR_QUERY, 8, "Failing command via 'failCommand' failpoint");
-   ASSERT (ret.res);
    ASSERT_CMPSIZE_T ((size_t) mongoc_bulkwriteresult_upsertedcount (ret.res), ==, numModels);
 
    // Check length of update results.
@@ -912,12 +915,12 @@ prose_test_10 (void *ctx)
       ASSERT_OR_PRINT (ok, error);
 
       mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, opts);
+      ASSERT (!ret.res); // No result due to unacknowledged write concern.
       ASSERT (ret.exc);
       if (!mongoc_bulkwriteexception_error (ret.exc, &error)) {
          test_error ("Expected top-level error but got:\n%s", test_bulkwriteexception_str (ret.exc));
       }
       ASSERT_ERROR_CONTAINS (error, MONGOC_ERROR_COMMAND, MONGOC_ERROR_COMMAND_INVALID_ARG, "of size");
-
       mongoc_bulkwriteexception_destroy (ret.exc);
       mongoc_bulkwriteresult_destroy (ret.res);
       mongoc_bulkwrite_destroy (bw);
@@ -930,12 +933,12 @@ prose_test_10 (void *ctx)
       ASSERT_OR_PRINT (ok, error);
 
       mongoc_bulkwritereturn_t ret = mongoc_bulkwrite_execute (bw, opts);
+      ASSERT (!ret.res); // No result due to unacknowledged write concern.
       ASSERT (ret.exc);
       if (!mongoc_bulkwriteexception_error (ret.exc, &error)) {
          test_error ("Expected top-level error but got:\n%s", test_bulkwriteexception_str (ret.exc));
       }
       ASSERT_ERROR_CONTAINS (error, MONGOC_ERROR_COMMAND, MONGOC_ERROR_COMMAND_INVALID_ARG, "of size");
-
       mongoc_bulkwriteexception_destroy (ret.exc);
       mongoc_bulkwriteresult_destroy (ret.res);
       mongoc_bulkwrite_destroy (bw);
@@ -1076,6 +1079,7 @@ prose_test_11 (void *ctx)
       // Execute.
       {
          mongoc_bulkwritereturn_t bwr = mongoc_bulkwrite_execute (tf->bw, NULL /* opts */);
+         ASSERT (bwr.res);
          ASSERT_NO_BULKWRITEEXCEPTION (bwr);
          ASSERT (mlib_in_range (int64_t, tf->numModels));
          ASSERT_CMPINT64 (mongoc_bulkwriteresult_insertedcount (bwr.res), ==, (int64_t) tf->numModels + 1);
@@ -1126,6 +1130,7 @@ prose_test_11 (void *ctx)
       // Execute.
       {
          mongoc_bulkwritereturn_t bwr = mongoc_bulkwrite_execute (tf->bw, NULL /* opts */);
+         ASSERT (bwr.res);
          ASSERT_NO_BULKWRITEEXCEPTION (bwr);
          ASSERT (mlib_in_range (int64_t, tf->numModels));
          ASSERT_CMPINT64 (mongoc_bulkwriteresult_insertedcount (bwr.res), ==, (int64_t) tf->numModels + 1);
@@ -1206,6 +1211,7 @@ prose_test_12 (void *ctx)
       // Execute.
       {
          mongoc_bulkwritereturn_t bwr = mongoc_bulkwrite_execute (bw, NULL);
+         ASSERT (!bwr.res); // No result due to no successful writes.
          ASSERT (bwr.exc);
          if (!mongoc_bulkwriteexception_error (bwr.exc, &error)) {
             test_error ("Expected top-level error but got:\n%s", test_bulkwriteexception_str (bwr.exc));
@@ -1234,6 +1240,7 @@ prose_test_12 (void *ctx)
       // Execute.
       {
          mongoc_bulkwritereturn_t bwr = mongoc_bulkwrite_execute (bw, NULL);
+         ASSERT (!bwr.res); // No result due to no successful writes.
          ASSERT (bwr.exc);
          if (!mongoc_bulkwriteexception_error (bwr.exc, &error)) {
             test_error ("Expected top-level error but got:\n%s", test_bulkwriteexception_str (bwr.exc));
@@ -1248,6 +1255,57 @@ prose_test_12 (void *ctx)
    }
 
    bson_free (large_str);
+   mongoc_client_destroy (client);
+}
+
+static void
+prose_test_13 (void *ctx)
+{
+   /*
+   13. `MongoClient.bulkWrite` errors if configured with automatic encryption.
+   */
+   mongoc_client_t *client;
+   BSON_UNUSED (ctx);
+   bool ok;
+   bson_error_t error;
+
+   client = test_framework_new_default_client ();
+   mongoc_auto_encryption_opts_t *aeo = mongoc_auto_encryption_opts_new ();
+   mongoc_auto_encryption_opts_set_keyvault_namespace (aeo, "db", "coll");
+   mongoc_auto_encryption_opts_set_kms_providers (
+      aeo, tmp_bson (BSON_STR ({"aws" : {"accessKeyId" : "foo", "secretAccessKey" : "bar"}})));
+   ok = mongoc_client_enable_auto_encryption (client, aeo, &error);
+   ASSERT_OR_PRINT (ok, error);
+
+   // Try to to a bulk write.
+   {
+      mongoc_bulkwrite_t *bw = mongoc_client_bulkwrite_new (client);
+
+      // Create bulk write.
+      {
+         ok = mongoc_bulkwrite_append_insertone (bw, "db.coll", tmp_bson ("{'a': 'b'}"), NULL, &error);
+         ASSERT_OR_PRINT (ok, error);
+      }
+
+      // Execute.
+      {
+         mongoc_bulkwritereturn_t bwr = mongoc_bulkwrite_execute (bw, NULL);
+         ASSERT (!bwr.res); // No result due to no successful writes.
+         ASSERT (bwr.exc);
+         if (!mongoc_bulkwriteexception_error (bwr.exc, &error)) {
+            test_error ("Expected top-level error but got:\n%s", test_bulkwriteexception_str (bwr.exc));
+         }
+         ASSERT_ERROR_CONTAINS (error,
+                                MONGOC_ERROR_COMMAND,
+                                MONGOC_ERROR_COMMAND_INVALID_ARG,
+                                "bulkWrite does not currently support automatic encryption");
+         mongoc_bulkwriteresult_destroy (bwr.res);
+         mongoc_bulkwriteexception_destroy (bwr.exc);
+      }
+      mongoc_bulkwrite_destroy (bw);
+   }
+
+   mongoc_auto_encryption_opts_destroy (aeo);
    mongoc_client_destroy (client);
 }
 
