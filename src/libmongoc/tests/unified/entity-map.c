@@ -50,6 +50,9 @@ typedef void (*event_serialize_func_t) (bson_t *bson, const void *event);
 static void
 entity_destroy (entity_t *entity);
 
+static bool
+_parse_and_set_auto_encryption_opts (mongoc_client_t *client, bson_t *opts, bson_error_t *error);
+
 entity_map_t *
 entity_map_new (void)
 {
@@ -923,7 +926,7 @@ entity_client_new (entity_map_t *em, bson_t *bson, bson_error_t *error)
    }
 
    if (auto_encryption_opts) {
-      set_auto_encryption_opts (client, auto_encryption_opts);
+      _parse_and_set_auto_encryption_opts (client, auto_encryption_opts, error);
    }
 
    ret = true;
@@ -1058,24 +1061,6 @@ _parse_kms_provider_aws (
       }
    }
 
-   BSON_ASSERT (bson_append_document_end (kms_providers, &child));
-
-   return true;
-}
-
-static bool
-_parse_kms_provider_aws_temp (
-   bson_t *kms_providers, bson_t *tls_opts, const char *provider, bson_t *kms_doc, bson_error_t *error)
-{
-   bson_t child;
-   BSON_UNUSED (tls_opts);
-
-   BSON_ASSERT (BSON_APPEND_DOCUMENT_BEGIN (kms_providers, provider, &child));
-   _append_kms_provider_value_or_getenv (&child, "secretAccessKey", NULL, "MONGOC_TEST_AWS_TEMP_SECRET_ACCESS_KEY", error);
-   _append_kms_provider_value_or_getenv (&child, "accessKeyId", NULL, "MONGOC_TEST_AWS_TEMP_ACCESS_KEY_ID", error);
-   if (strcmp(provider, "awsTemporaryNoSessionToken") != 0) {
-      _append_kms_provider_value_or_getenv (&child, "sessionToken", NULL, "MONGOC_TEST_AWS_TEMP_SESSION_TOKEN", error);
-   }
    BSON_ASSERT (bson_append_document_end (kms_providers, &child));
 
    return true;
@@ -1263,7 +1248,7 @@ _parse_kms_provider_local (
 }
 
 static bool
-_parse_and_set_kms_providers (mongoc_client_encryption_opts_t *ce_opts, bson_t *kms_from_file, bson_error_t *error)
+_get_kms_providers_docs (bson_t *kms_from_file, bson_t *kms_providers, bson_t *tls_opts, bson_error_t *error)
 {
    /* Map provider to corresponding KMS parser. */
    typedef struct _prov_map_t {
@@ -1275,8 +1260,6 @@ _parse_and_set_kms_providers (mongoc_client_encryption_opts_t *ce_opts, bson_t *
    const prov_map_t prov_map[] = {{.provider = "aws", .parse = _parse_kms_provider_aws},
                                   {.provider = "aws:name1", .parse = _parse_kms_provider_aws},
                                   {.provider = "aws:name2", .parse = _parse_kms_provider_aws},
-                                  {.provider = "awsTemporary", .parse = _parse_kms_provider_aws_temp},
-                                  {.provider = "awsTemporaryNoSessionToken", .parse = _parse_kms_provider_aws_temp},
                                   {.provider = "azure", .parse = _parse_kms_provider_azure},
                                   {.provider = "azure:name1", .parse = _parse_kms_provider_azure},
                                   {.provider = "gcp", .parse = _parse_kms_provider_gcp},
@@ -1288,10 +1271,6 @@ _parse_and_set_kms_providers (mongoc_client_encryption_opts_t *ce_opts, bson_t *
                                   {.provider = "local:name2", .parse = _parse_kms_provider_local}};
 
    const size_t prov_map_size = sizeof (prov_map) / sizeof (prov_map[0]);
-
-   bool ret = false;
-   bson_t kms_providers = BSON_INITIALIZER;
-   bson_t tls_opts = BSON_INITIALIZER;
    bson_iter_t iter;
 
    BSON_FOREACH (kms_from_file, iter)
@@ -1303,12 +1282,12 @@ _parse_and_set_kms_providers (mongoc_client_encryption_opts_t *ce_opts, bson_t *
 
       if (!bson_init_from_value (&kms_doc, bson_iter_value (&iter))) {
          test_set_error (error, "kmsProviders field '%s' is not a valid document", provider);
-         goto done;
+         return false;
       }
 
       for (i = 0u; i < prov_map_size; ++i) {
          if (strcmp (provider, prov_map[i].provider) == 0) {
-            found = prov_map[i].parse (&kms_providers, &tls_opts, provider, &kms_doc, error);
+            found = prov_map[i].parse (kms_providers, tls_opts, provider, &kms_doc, error);
             goto parsed;
          }
       }
@@ -1319,13 +1298,117 @@ _parse_and_set_kms_providers (mongoc_client_encryption_opts_t *ce_opts, bson_t *
       bson_destroy (&kms_doc);
 
       if (!found) {
-         goto done;
+         return false;
       }
    }
+   return true;
+}
 
+static bool
+_parse_and_set_auto_encryption_opts (mongoc_client_t *client, bson_t *opts, bson_error_t *error)
+{
+   bool ret = false;
+   mongoc_auto_encryption_opts_t *auto_encryption_opts = mongoc_auto_encryption_opts_new ();
+   bson_t kms_providers = BSON_INITIALIZER;
+   bson_t tls_opts = BSON_INITIALIZER;
+   BSON_ASSERT (client);
+
+   bson_parser_t *const parser = bson_parser_new ();
+
+   bson_t *kms_providers_raw;
+   bson_parser_doc (parser, "kmsProviders", &kms_providers_raw);
+
+   char *keyvault_ns;
+   bson_parser_utf8 (parser, "keyVaultNamespace", &keyvault_ns);
+
+   bson_t *schema_map;
+   bson_parser_doc_optional (parser, "schemaMap", &schema_map);
+
+   bool *bypass_auto_encryption;
+   bson_parser_bool_optional (parser, "bypassAutoEncryption", &bypass_auto_encryption);
+
+   bool *bypass_query_analysis;
+   bson_parser_bool_optional (parser, "bypassQueryAnalysis", &bypass_query_analysis);
+
+   bson_t *encrypted_fields_map;
+   bson_parser_doc_optional (parser, "encryptedFieldsMap", &encrypted_fields_map);
+
+   int64_t *key_expiration_ms;
+   bson_parser_int_optional (parser, "keyExpirationMS", &key_expiration_ms);
+
+   bson_t *extra_options;
+   bson_parser_doc_optional (parser, "extraOptions", &extra_options);
+
+   if (!bson_parser_parse (parser, opts, error)) {
+      goto done;
+   }
+
+   {
+      if (!_get_kms_providers_docs (kms_providers_raw, &kms_providers, &tls_opts, error)) {
+         goto done;
+      }
+      mongoc_auto_encryption_opts_set_kms_providers (auto_encryption_opts, &kms_providers);
+      mongoc_auto_encryption_opts_set_tls_opts (auto_encryption_opts, &tls_opts);
+   }
+
+   {
+      // keyVaultNamespace
+      char *dot = strstr (keyvault_ns, ".");
+      BSON_ASSERT (dot);
+      char *db_name = bson_strndup (keyvault_ns, dot - keyvault_ns);
+      char *coll_name = bson_strdup (dot + 1);
+      mongoc_auto_encryption_opts_set_keyvault_namespace (auto_encryption_opts, db_name, coll_name);
+
+      bson_free (db_name);
+      bson_free (coll_name);
+   }
+
+   if (schema_map) {
+      mongoc_auto_encryption_opts_set_schema_map (auto_encryption_opts, schema_map);
+   }
+
+   if (bypass_auto_encryption) {
+      mongoc_auto_encryption_opts_set_bypass_auto_encryption (auto_encryption_opts, *bypass_auto_encryption);
+   }
+
+   if (bypass_query_analysis) {
+      mongoc_auto_encryption_opts_set_bypass_query_analysis (auto_encryption_opts, *bypass_query_analysis);
+   }
+
+   if (encrypted_fields_map) {
+      mongoc_auto_encryption_opts_set_encrypted_fields_map (auto_encryption_opts, encrypted_fields_map);
+   }
+
+   if (key_expiration_ms) {
+      mongoc_auto_encryption_opts_set_key_expiration (auto_encryption_opts, *key_expiration_ms);
+   }
+
+   if (extra_options) {
+      mongoc_auto_encryption_opts_set_extra (auto_encryption_opts, extra_options);
+   }
+
+   mongoc_client_enable_auto_encryption(client, auto_encryption_opts, error);
+   ret = true;
+
+done:
+   mongoc_auto_encryption_opts_destroy (auto_encryption_opts);
+   bson_destroy (&kms_providers);
+   bson_destroy (&tls_opts);
+   bson_parser_destroy_with_parsed_fields (parser);
+   return ret;
+}
+
+static bool
+_parse_and_set_kms_providers (mongoc_client_encryption_opts_t *ce_opts, bson_t *kms_from_file, bson_error_t *error)
+{
+   bool ret = false;
+   bson_t kms_providers = BSON_INITIALIZER;
+   bson_t tls_opts = BSON_INITIALIZER;
+   if (!_get_kms_providers_docs (kms_from_file, &kms_providers, &tls_opts, error)) {
+      goto done;
+   }
    mongoc_client_encryption_opts_set_kms_providers (ce_opts, &kms_providers);
    mongoc_client_encryption_opts_set_tls_opts (ce_opts, &tls_opts);
-
    ret = true;
 
 done:
