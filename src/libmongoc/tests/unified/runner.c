@@ -104,14 +104,7 @@ skipped_unified_test_t SKIPPED_TESTS[] = {
    // libmongoc does not support the optional findOne helper.
    {"retryable reads handshake failures", "collection.findOne succeeds after retryable handshake network error"},
    {"retryable reads handshake failures", "collection.findOne succeeds after retryable handshake server error (ShutdownInProgress)"},
-   {"types", SKIP_ALL_TESTS},
-   // libmongoc does not support the optional listIndexNames helper.
-   {"retryable reads handshake failures", "collection.listIndexNames succeeds after retryable handshake network error"},
-   {"retryable reads handshake failures", "collection.listIndexNames succeeds after retryable handshake server error (ShutdownInProgress)"},
-   // libmongoc does not support mapReduce.
-   {"unsupportedCommand", SKIP_ALL_TESTS},
-   // libmongoc does not support the timeoutMS URI option
-   {"timeoutMS", SKIP_ALL_TESTS},
+
    // libmongoc does not support the optional listIndexNames helper.
    {"retryable reads handshake failures", "collection.listIndexNames succeeds after retryable handshake network error"},
    {"retryable reads handshake failures", "collection.listIndexNames succeeds after retryable handshake server error (ShutdownInProgress)"},
@@ -121,6 +114,7 @@ skipped_unified_test_t SKIPPED_TESTS[] = {
 
    // libmongoc does not include insertId in InsertOneResult
    {"cancel-server-check", SKIP_ALL_TESTS},
+
    {0},
 };
 // clang-format on
@@ -1407,21 +1401,6 @@ is_keyvault_listcollections (const bson_t *event)
 }
 
 static bool
-skip_cse_list_collections (const bson_t *event)
-{
-   if (!bson_has_field(event, "commandName") || !bson_has_field(event, "databaseName")) {
-      return false;
-   }
-
-   const char *cmdname = bson_lookup_utf8 (event, "commandName");
-   const char *dbname = bson_lookup_utf8 (event, "databaseName");
-   if (cmdname && 0 == strcmp (cmdname, "listCollections") && dbname && 0 == strcmp (dbname, "keyvault")) {
-      return true;
-   }
-   return false;
-}
-
-static bool
 test_check_expected_events_for_client (test_t *test, bson_t *expected_events_for_client, bson_error_t *error)
 {
    bool ret = false;
@@ -1459,33 +1438,10 @@ test_check_expected_events_for_client (test_t *test, bson_t *expected_events_for
       goto done;
    }
 
+   uint32_t expected_num_events = bson_count_keys (expected_events);
+   uint32_t actual_num_events = 0;
+
    event_t *eiter;
-   int actual_listCollections_count = 0;
-   LL_FOREACH (entity->events, eiter)
-   {
-      if (skip_cse_list_collections (eiter->serialized)) {
-         actual_listCollections_count++;
-      }
-   }
-   eiter = entity->events;
-
-   bson_iter_t iter;
-   int expected_listCollections_count = 0;
-   BSON_FOREACH(expected_events, iter) {
-      bson_t expected_event;
-      bson_iter_bson (&iter, &expected_event);
-      BSON_FOREACH(&expected_event, iter) {
-         bson_t event_contents;
-         bson_iter_bson (&iter, &event_contents);
-         if (skip_cse_list_collections (&event_contents)) {
-            expected_listCollections_count++;
-            break;
-         }
-      }
-   }
-
-   int expected_num_events = bson_count_keys (expected_events);
-   int actual_num_events = 0;
    LL_FOREACH (entity->events, eiter)
    {
       if (is_keyvault_listcollections (eiter->serialized)) {
@@ -1497,27 +1453,22 @@ test_check_expected_events_for_client (test_t *test, bson_t *expected_events_for
       }
    }
 
-   {
-      const int difference = (actual_num_events - actual_listCollections_count) - (expected_num_events - expected_listCollections_count);
-      bool too_many_events = difference > 0;
-      bool too_few_events = difference < 0;
-      if (actual_listCollections_count < expected_listCollections_count) {
-         too_few_events = true;
-      }
-
    if (expected_num_events != actual_num_events) {
+      bool too_many_events = actual_num_events > expected_num_events;
       if (ignore_extra_events && *ignore_extra_events) {
          // We can never have too many events
          too_many_events = false;
       }
+      bool too_few_events = actual_num_events < expected_num_events;
       if (too_few_events || too_many_events) {
          test_set_error (
-            error, "expected: %" PRIi32 " events but got %" PRIi32, expected_num_events, actual_num_events);
+            error, "expected: %" PRIu32 " events but got %" PRIu32, expected_num_events, actual_num_events);
          goto done;
       }
    }
 
    eiter = entity->events;
+   bson_iter_t iter;
    BSON_FOREACH (expected_events, iter)
    {
       while (eiter &&
@@ -1528,39 +1479,9 @@ test_check_expected_events_for_client (test_t *test, bson_t *expected_events_for
       }
       bson_t expected_event;
       bson_iter_bson (&iter, &expected_event);
-
-      do {
-         if (!eiter) {
-            break;
-         }
-         matched = test_check_event (test, &expected_event, eiter, error);
-         if (matched) {
-            continue;
-         }
-
-         if (ignore_extra_events) {
-            continue;
-         }
-
-         if (skip_cse_list_collections (eiter->serialized)) {
-            continue;
-         }
-
-         test_set_error (error,
-                         "could not match event\n"
-                         "\texpected: %s\n\n"
-                         "\tactual  : %s\n\n ",
-                         bson_as_canonical_extended_json (&expected_event, NULL),
-                         bson_as_canonical_extended_json (eiter->serialized, NULL));
-         break;
-      } while ((eiter = eiter->next) && !matched);
-
-      if (!matched) {
+      if (!eiter) {
+         test_set_error (error, "could not find event: %s", tmp_json (&expected_event));
          goto done;
-         test_set_error (error,
-                         "expectation unmatched\n"
-                         "\texpected: %s\n\n",
-                         tmp_json (&expected_event));
       }
       if (!test_check_event (test, &expected_event, eiter, error)) {
          test_diagnostics_error_info ("could not match event\n"
@@ -1572,7 +1493,6 @@ test_check_expected_events_for_client (test_t *test, bson_t *expected_events_for
       }
       eiter = eiter->next;
    }
-}
 
    ret = true;
 done:
@@ -1962,24 +1882,16 @@ test_check_outcome_collection (test_t *test, bson_t *collection_data, bson_error
       bson_iter_bson (&eiter, &expected);
       expected_sorted = bson_copy_and_sort (&expected);
 
-      bson_val_t *actual_v = bson_val_from_bson (actual_sorted);
-      bson_val_t *expected_v = bson_val_from_bson (expected_sorted);
 
-      bson_matcher_context_t matcher_context = {.matcher = bson_matcher_new (), .path = "", .is_root = true};
-      if (!bson_matcher_match (&matcher_context, expected_v, actual_v, error)) {
+      if (!bson_equal (actual_sorted, expected_sorted)) {
          test_set_error (error, "expected %s, but got %s", tmp_json (expected_sorted), tmp_json (actual_sorted));
-         const char *got = tmp_json (actual_sorted);
-         printf ("this: %s", got);
          bson_destroy (actual_sorted);
          bson_destroy (expected_sorted);
          goto done;
       }
 
-      bson_matcher_destroy (matcher_context.matcher);
       bson_destroy (actual_sorted);
       bson_destroy (expected_sorted);
-      bson_val_destroy (actual_v);
-      bson_val_destroy (expected_v);
 
       bson_iter_next (&eiter);
    }
