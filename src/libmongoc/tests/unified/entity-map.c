@@ -926,7 +926,9 @@ entity_client_new (entity_map_t *em, bson_t *bson, bson_error_t *error)
    }
 
    if (auto_encryption_opts) {
-      _parse_and_set_auto_encryption_opts (client, auto_encryption_opts, error);
+      if (!_parse_and_set_auto_encryption_opts (client, auto_encryption_opts, error)) {
+         goto done;
+      }
    }
 
    ret = true;
@@ -1250,6 +1252,11 @@ _parse_kms_provider_local (
 static bool
 _get_kms_providers_docs (bson_t *kms_from_file, bson_t *kms_providers, bson_t *tls_opts, bson_error_t *error)
 {
+   BSON_ASSERT_PARAM (kms_from_file);
+   BSON_ASSERT_PARAM (kms_providers);
+   BSON_ASSERT_PARAM (tls_opts);
+   BSON_OPTIONAL_PARAM (error);
+
    /* Map provider to corresponding KMS parser. */
    typedef struct _prov_map_t {
       const char *provider;
@@ -1387,7 +1394,9 @@ _parse_and_set_auto_encryption_opts (mongoc_client_t *client, bson_t *opts, bson
       mongoc_auto_encryption_opts_set_extra (auto_encryption_opts, extra_options);
    }
 
-   mongoc_client_enable_auto_encryption(client, auto_encryption_opts, error);
+   if (!mongoc_client_enable_auto_encryption (client, auto_encryption_opts, error)) {
+      goto done;
+   }
    ret = true;
 
 done:
@@ -1769,7 +1778,10 @@ done:
 }
 
 entity_t *
-entity_session_new (entity_map_t *entity_map, bson_t *bson, bson_error_t *error)
+entity_session_new (entity_map_t *entity_map,
+                    bson_t *bson,
+                    const bson_t *cluster_time_after_initial_data,
+                    bson_error_t *error)
 {
    bson_parser_t *parser = NULL;
    entity_t *entity = NULL;
@@ -1808,6 +1820,9 @@ entity_session_new (entity_map_t *entity_map, bson_t *bson, bson_error_t *error)
    session = mongoc_client_start_session (client, session_opts, error);
    if (!session) {
       goto done;
+   }
+   if (cluster_time_after_initial_data) {
+      mongoc_client_session_advance_cluster_time (session, cluster_time_after_initial_data);
    }
    entity->value = session;
    /* Ending a session destroys the session object.
@@ -1903,7 +1918,10 @@ done:
  * object immediately.
  */
 bool
-entity_map_create (entity_map_t *entity_map, bson_t *bson, bson_error_t *error)
+entity_map_create (entity_map_t *entity_map,
+                   bson_t *bson,
+                   const bson_t *cluster_time_after_initial_data,
+                   bson_error_t *error)
 {
    bson_iter_t iter;
    const char *entity_type;
@@ -1934,7 +1952,7 @@ entity_map_create (entity_map_t *entity_map, bson_t *bson, bson_error_t *error)
    } else if (0 == strcmp (entity_type, "collection")) {
       entity = entity_collection_new (entity_map, &entity_bson, error);
    } else if (0 == strcmp (entity_type, "session")) {
-      entity = entity_session_new (entity_map, &entity_bson, error);
+      entity = entity_session_new (entity_map, &entity_bson, cluster_time_after_initial_data, error);
    } else if (0 == strcmp (entity_type, "bucket")) {
       entity = entity_bucket_new (entity_map, &entity_bson, error);
    } else {
