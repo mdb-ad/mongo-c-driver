@@ -35,7 +35,6 @@
 #include <mongoc/mongoc-client-private.h>
 #include <mongoc/mongoc-topology-private.h>
 #include <common-string-private.h>
-#include "json-test.h"
 
 #define REDUCED_HEARTBEAT_FREQUENCY_MS 500
 #define REDUCED_MIN_HEARTBEAT_FREQUENCY_MS 50
