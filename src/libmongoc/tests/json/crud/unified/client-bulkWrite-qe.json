@@ -16,6 +16,7 @@
           "commandSucceededEvent"
         ],
         "autoEncryptOpts": {
+          "keyVaultNamespace": "keyvault.datakeys",
           "kmsProviders": {
             "local": {
               "key": "Mng0NCt4ZHVUYUJCa1kxNkVyNUR1QURhZ2h2UzR2d2RrZzh0cFBwM3R6NmdWMDFBMUN3YkQ5aXRRMkhGRGdQV09wOGVNYUMxT2k3NjZKelhaQmRCZGJkTXVyZG9uSjFk"
@@ -39,6 +40,14 @@
       }
     },
     {
+      "client": {
+        "id": "client1",
+        "observeEvents": [
+          "commandStartedEvent"
+        ]
+      }
+    },
+    {
       "database": {
         "id": "database1",
         "client": "client0",
@@ -50,6 +59,20 @@
         "id": "collection1",
         "database": "database0",
         "collectionName": "datakeys"
+      }
+    },
+    {
+      "database": {
+        "id": "database2",
+        "client": "client1",
+        "databaseName": "crud-tests"
+      }
+    },
+    {
+      "collection": {
+        "id": "collection2",
+        "database": "database2",
+        "collectionName": "coll0"
       }
     }
   ],
@@ -188,13 +211,14 @@
               "encryptedInt": 44
             }
           ]
-        }
-      ],
-      "outcome": [
+        },
         {
-          "collectionName": "coll0",
-          "databaseName": "crud-tests",
-          "documents": [
+          "object": "collection2",
+          "name": "find",
+          "arguments": {
+            "filter": {}
+          },
+          "expectResult": [
             {
               "_id": 1,
               "encryptedInt": {
